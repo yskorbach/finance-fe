@@ -3,12 +3,12 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Mail, Lock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { api } from "@/lib/api";
+import {api, ApiError} from "@/lib/api";
 
 const loginSchema = z.object({
   email: z.email("Please provide a valid email address"),
@@ -18,20 +18,34 @@ type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginForm() {
   const router = useRouter();
+  const sp = useSearchParams();
+  const nextUrl = sp.get("next") ?? "/dashboard";
+
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     mode: "onChange",
-    defaultValues: { email: "", password: ""},
+    defaultValues: { email: "", password: "" },
   });
 
+
+  type LoginResponse = { token: string; user?: { id: number; email: string } };
+
   const mutation = useMutation({
-    mutationFn: async (data: LoginValues) => api.post("/api/auth/login", data),
-    onSuccess: () => router.replace("/dashboard"),
+    mutationFn: async (values: LoginValues) => {
+      const res = await api.post<LoginResponse>("/api/auth/login", values); //
+      const token = res.data?.token;
+      if (!token) {
+        throw { status: 500, message: "Missing access token in response" } as ApiError;
+      }
+      api.saveToken(token);
+      return { next: nextUrl };
+    },
+    onSuccess: ({next}) => router.replace(next),
     onError: (err: any) => {
-      if (api.isUnauthorized(err)) {
+      if (err?.status === 401) {
         form.setError("root", { message: "Incorrect login details" });
       } else {
-        form.setError("root", { message: "Failed to log in. Please try again." });
+        form.setError("root", { message: err?.message || "Failed to log in. Please try again." });
       }
     },
   });
@@ -79,7 +93,7 @@ export function LoginForm() {
           <p role="alert" className="text-sm text-destructive">{form.formState.errors.root.message}</p>
         ) : null}
 
-        <Button type="submit" className="w-full" disabled={mutation.isPending}>
+        <Button type="submit" variant="secondary" className="w-full" disabled={mutation.isPending}>
           {mutation.isPending ? (
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Logging in…
